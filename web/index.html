@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maptotrack</title>
+<link rel="stylesheet" href="/web/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/web/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "/web/vendor/three/build/three.module.min.js",
+  "three/addons/": "/web/vendor/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<aside id="side">
+  <header>
+    <div class="brand">map<b>to</b>track</div>
+    <div class="hdr-actions">
+      <select id="projectSelect" title="Open a saved project"><option value="">Open project…</option></select>
+      <button id="settingsBtn" class="icon" title="Settings">⚙</button>
+    </div>
+  </header>
+  <div id="offlineBanner" class="banner hidden">Offline demo mode: synthetic roads, buildings and elevation.</div>
+
+  <!-- 1 ------------------------------------------------------------------------------------------------ -->
+  <section class="card">
+    <h2><span class="step">1</span> Location</h2>
+    <div class="seg-toggle" id="modeToggle">
+      <button data-mode="route" class="active" title="A track along the waypoints you click (circuit or point to point)">Route</button>
+      <button data-mode="area" title="Like Map2Lap's areas: every drivable street inside a rectangle or polygon you draw becomes road (free roam), up to 10 km²">Area (free roam)</button>
+    </div>
+    <div class="row">
+      <input id="search" placeholder="Search a place (city, road, mountain pass…)">
+      <button id="searchBtn">Go</button>
+    </div>
+    <ul id="searchResults" class="results hidden"></ul>
+    <label class="field">Track name <input id="name" value="My Track"></label>
+
+    <div class="route-only">
+      <div class="group-title">Route</div>
+      <details class="howto">
+        <summary>How to draw it</summary>
+        Click the map to add waypoints at the end. To add a point <b>in the middle</b>, click on the track (or drag a
+        small <b>+</b> handle, or use <b>+</b> in the list). Drag a point to move it, right-click it to delete it.
+        Each segment follows the roads or is a free line: click its pill in the list to switch.
+      </details>
+      <div class="chkgrid">
+        <label class="chk"><input type="checkbox" id="loop" checked> Closed circuit</label>
+        <label class="chk"><input type="checkbox" id="ignoreOneway"> Ignore one-way streets</label>
+      </div>
+      <div class="row">
+        <select id="defaultMode" title="Mode for new segments">
+          <option value="road">New segments follow roads</option>
+          <option value="free">New segments are free lines</option>
+        </select>
+      </div>
+      <ol id="wpList" class="wplist"></ol>
+      <div class="row">
+        <button id="undoBtn">Undo</button>
+        <button id="clearBtn">Clear</button>
+        <button id="importBtn" title="KML (Google My Maps export) or GPX">Import KML / GPX…</button>
+        <input type="file" id="importFile" accept=".kml,.gpx,.xml" class="hidden">
+      </div>
+      <div class="row"><input id="gmapsUrl" placeholder="…or paste a Google Maps directions link"><button id="gmapsBtn">Use</button></div>
+      <div id="routeInfo" class="info"></div>
+    </div>
+
+    <div class="area-only">
+      <div class="group-title">Area</div>
+      <details class="howto">
+        <summary>How it works</summary>
+        Every drivable street inside the area becomes road, with width and markings read on the photo, smooth
+        heights and junctions with rounded kerbs. <b>Rectangle</b>: drag it on the map. <b>Polygon</b>: click its
+        corners, then click the first one (or double-click) to finish; drag a corner to move it, right-click it to
+        remove it, drag a small <b>+</b> to add one. At most 10 km² and 6 km across; above 4 km² the ground texture
+        gets coarser so the track stays light. <b>Start spot</b>: click it, then click the street where the cars
+        should start (otherwise the main street near the middle).
+      </details>
+      <div class="row">
+        <button id="drawAreaBtn" title="Drag a rectangle on the map">Rectangle</button>
+        <button id="drawPolyBtn" title="Click the corners on the map; click the first corner or double-click to finish">Polygon</button>
+        <button id="spawnBtn" title="Then click a street on the map">Start spot</button>
+        <button id="clearAreaBtn">Clear</button>
+      </div>
+      <div id="areaInfo" class="info"></div>
+    </div>
+    <div class="chkgrid">
+      <label class="chk" title="Route: drive the track the other way. Area: the cars start facing the other way (on a two-way street)"><input type="checkbox" id="reverse"> Reverse direction</label>
+    </div>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------------------------------------------ -->
+  <section class="card">
+    <h2><span class="step">2</span> Road</h2>
+    <div class="group-title first">Width</div>
+    <div class="grid2">
+      <label class="field" title="Measure the real asphalt width on the aerial photo, or use one fixed width">Road width
+        <select id="width_mode"><option value="photo">Measure on photo</option><option value="fixed">Fixed</option></select></label>
+      <label class="field" title="Used everywhere when Fixed, and where the photo can't be read">Width (m) <input type="number" id="width" step="0.5" min="3" max="40"></label>
+      <label class="field" title="Evens out the photo-measured width along the track: it is averaged over this length, short spikes (driveways, side streets, shadows) are removed. 0 = raw measurement. Manual width settings stay exact.">Width smoothing (m) <input type="number" id="width_smoothing" step="5" min="0" max="200"></label>
+      <label class="field route-only">Shoulder (m) <input type="number" id="shoulder" step="0.5" min="0" max="10"></label>
+    </div>
+
+    <div class="group-title">Shape</div>
+    <div class="grid2">
+      <label class="field" title="Smooths the road height along the track. 10-15 m for kart tracks, 25 m for roads. Bumps shorter than ~10 m are always removed.">Elevation smoothing (m) <input type="number" id="elev_smoothing" step="5" min="0" max="200"></label>
+      <label class="field" title="How much higher the middle of the road is than its edges">Road crown (m) <input type="number" id="camber" step="0.01" min="0" max="0.5"></label>
+      <label class="field route-only" title="Bigger = rounder corners. Street junctions are 90°; 6–15 m makes them drivable.">Corner smoothing (m) <input type="number" id="corner_smoothing" step="1" min="0" max="60"></label>
+    </div>
+
+    <div class="group-title">Lines &amp; edges</div>
+    <div class="grid2">
+      <label class="field" title="From photo: the lines really painted on this road - where they are, solid or dashed, white or yellow, and none where the road has none. Standard: white edge lines and a dashed centre line everywhere (also used when the photo can't be read). Check them with 'Preview road on map'.">Road markings
+        <select id="markings"><option value="photo">From photo (as painted)</option><option value="standard">Standard</option><option value="none">None</option></select></label>
+      <label class="field route-only" title="Tyre walls where the aerial photo shows them (dark beaded bands beside the track), built as stacks of 3 tyres that karts bounce off. Auto: only when OpenStreetMap maps the track as a race / kart track (on public roads, shadows and ditches could look like tyres). Check them with 'Preview road on map'.">Tyre walls
+        <select id="tyres"><option value="auto">Auto (race tracks)</option><option value="on">From photo</option><option value="off">None</option></select></label>
+      <label class="field route-only">Barriers
+        <select id="walls"><option value="concrete">Concrete walls</option><option value="none">None</option></select></label>
+      <label class="field route-only" title="Distance from the road edge to the barriers">Barrier gap (m) <input type="number" id="wall_offset" step="0.5" min="0" max="30"></label>
+    </div>
+
+    <div class="group-title">Start</div>
+    <div class="grid3">
+      <label class="field">Grid slots <input type="number" id="grid" min="1" max="40"></label>
+      <label class="field">Pit boxes <input type="number" id="pits" min="1" max="40"></label>
+      <label class="field route-only" title="Moves the start/finish line along a closed circuit">Start offset (m) <input type="number" id="start_offset" step="10"></label>
+    </div>
+
+    <div class="preview-bar">
+      <button id="previewBtn" title="Builds only the road - centreline, width measured on the photo, smoothing, elevation, start and pit spots - and draws it on the map. Nothing else is generated.">Preview road on map</button>
+      <label class="chk" title="Refresh the preview by itself when you move points or change a road setting"><input type="checkbox" id="livePreview"> Live</label>
+      <span id="pvState" class="muted"></span>
+    </div>
+    <div id="pvResult" class="hidden">
+      <div id="pvStats" class="stats"></div>
+      <div id="pvWarnings"></div>
+      <div class="chart-wrap route-only">
+        <div class="chart-title">Road width (preview)</div>
+        <canvas id="pvWidth" height="110"></canvas>
+        <div id="pvWidthTip" class="tip hidden"></div>
+      </div>
+      <div class="chart-wrap route-only">
+        <div class="chart-title">Elevation (preview, without LiDAR)</div>
+        <canvas id="pvProfile" height="110"></canvas>
+        <div id="pvProfileTip" class="tip hidden"></div>
+      </div>
+    </div>
+    <div class="group-title">Manual road widths</div>
+    <p class="hint" id="ovHint">Preview the road (or generate), then right-click the track (in area mode: any street) on the map to check the measured width or set it by hand.</p>
+    <ul id="ovList" class="ovlist"></ul>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------------------------------------------ -->
+  <section class="card">
+    <h2><span class="step">3</span> Scenery</h2>
+    <div class="group-title first">Terrain</div>
+    <div class="grid3">
+      <label class="field route-only" title="How far the scenery reaches around the track">Area around (m) <input type="number" id="margin" step="50" min="50" max="3000"></label>
+      <label class="field" title="Terrain grid resolution away from the road - lower is more detailed and heavier">Terrain grid (m) <input type="number" id="terrain_spacing" step="1" min="2" max="50"></label>
+      <label class="field" title="Elevation tiles: 14 ≈ 10 m pixels, 15 ≈ 5 m (where available)">Elevation detail
+        <select id="dem_zoom"><option value="13">Low</option><option value="14">Normal</option><option value="15">High</option></select></label>
+    </div>
+    <div class="chkgrid">
+      <label class="chk" title="Off: only a strip of ground along the road and the streets (to put your own scenery around it)"><input type="checkbox" id="terrain" checked> Terrain</label>
+      <label class="chk" title="Quebec 1 m laser survey: exact ground/road heights, real building and tree heights. Downloads roughly 0.3-1.5 GB per map sheet, once."><input type="checkbox" id="lidar"> Quebec LiDAR 1 m <span class="muted">(big download)</span></label>
+      <label class="chk" title="Natural Resources Canada's HRDEM: 1 m (or 2 m) LiDAR terrain for most of Canada. Only the window around the track is read (a few MB), saved in cache/hrdem. Where it has no LiDAR, the standard elevation is used. Quebec LiDAR (if ticked) is used on top of it."><input type="checkbox" id="hrdem" checked> Canada HRDEM 1 m <span class="muted">(NRCan)</span></label>
+    </div>
+
+    <div class="group-title">Ground</div>
+    <div class="grid2">
+      <label class="field" title="Aerial photos where available; otherwise colours from the land cover map">Ground texture
+        <select id="ground"><option value="auto">Auto (aerial photo if available)</option></select></label>
+      <label class="field" title="Texture resolution of the ground. 0.25 m matches the Quebec 20 cm photos.">Ground detail
+        <select id="ground_res"><option value="0.25">High (0.25 m/px)</option><option value="0.5">Medium (0.5 m/px)</option><option value="1">Low (1 m/px)</option></select></label>
+      <label class="field" title="Metres beside the track where the ground uses real photo materials (grass, dry grass, soil, sand, gravel, forest floor, driveway asphalt) repeated every 2-3 m, sharp from the driver's seat, instead of the 25 cm ground texture. 0 = off.">Sharp ground (m)
+        <input type="number" id="near_ground" min="0" max="60" step="5"></label>
+    </div>
+    <div class="chkgrid">
+      <label class="chk" title="Forest/shrub/crop zones from ESA WorldCover (via Overture Maps)"><input type="checkbox" id="overture_landcover" checked> Global land cover map</label>
+      <label class="chk" title="Neutral-grey smooth surfaces on the photo that touch a street or building become drivable asphalt patches"><input type="checkbox" id="photo_paved" checked> Driveways &amp; parking <span class="muted">(photo)</span></label>
+      <label class="chk wide" title="Experimental, Assetto Corsa only: photo grain on the whole ground near the car (ksMultilayer shader). In the first test it made the ground grey; the road, streets and shoulders already use sharp tiled photo materials without it."><input type="checkbox" id="ml_ground"> Close-up ground detail <span class="muted">(experimental)</span></label>
+    </div>
+
+    <div class="group-title">Buildings</div>
+    <div class="chkgrid">
+      <label class="chk"><input type="checkbox" id="buildings" checked> Buildings</label>
+      <label class="chk"><input type="checkbox" id="buildings_collide" checked> Solid</label>
+      <label class="chk" title="Adds AI-detected building footprints (Microsoft/Google via Overture Maps) where OpenStreetMap has none"><input type="checkbox" id="overture_buildings" checked> Fill missing (Overture)</label>
+      <label class="chk" title="Finds buildings missing from the map, snaps mapped outlines onto the photo, and takes real heights from LiDAR when it's on"><input type="checkbox" id="photo_buildings" checked> Find on photo / LiDAR</label>
+    </div>
+    <div class="row"><button id="sceneryBtn">Show buildings on map</button></div>
+    <div id="sceneryInfo" class="info"></div>
+    <div class="legend hidden" id="bldLegend">
+      <span><i class="sw inc"></i>kept</span><span><i class="sw auto"></i>on the road (removed)</span>
+      <span><i class="sw fexc"></i>removed by you</span><span><i class="sw finc"></i>kept by you</span>
+      <div class="hint">Click a building to keep/remove it.</div>
+    </div>
+
+    <div class="group-title">Trees &amp; grass</div>
+    <div class="grid3">
+      <label class="field">Tree density
+        <select id="tree_density"><option value="0.5">Sparse</option><option value="1">Normal</option><option value="1.6">Dense</option></select></label>
+      <label class="field" title="Share of conifers in forests (boreal Quebec ≈ 60%)">Conifers (%)
+        <input type="number" id="conifer_pct" min="0" max="100" step="10" value="60"></label>
+      <label class="field" title="How much 3D grass: dense near the road, thinning out with distance">Grass density
+        <select id="grass_density"><option value="0.5">Low</option><option value="1" selected>Normal</option><option value="1.8">High</option></select></label>
+    </div>
+    <div class="chkgrid">
+      <label class="chk"><input type="checkbox" id="trees" checked> Trees &amp; bushes</label>
+      <label class="chk" title="Trees and bushes placed on real tree crowns"><input type="checkbox" id="photo_trees" checked> Trees from photo</label>
+      <label class="chk" title="Short 3D grass tufts on lawns, densest near the road"><input type="checkbox" id="grass" checked> 3D grass</label>
+      <label class="chk" title="Tall grass on unmowed areas, ditches, dry lots and hay fields"><input type="checkbox" id="wild_grass" checked> Tall grass</label>
+      <label class="chk" title="Assetto Corsa with Custom Shaders Patch: real 3D grass (Grass FX) that sways in the wind - short mown grass on lawns, tall grass on wild areas, none on sand, gravel or driveways. Written to extension/ext_config.ini; ignored without CSP. Not shown in this 3D preview."><input type="checkbox" id="grass_fx" checked> CSP Grass FX</label>
+      <label class="chk" title="Assetto Corsa with Custom Shaders Patch: real 3D trees (CSP tree system: detail levels, distant billboards, seasons) at the positions of the trees found on the photo / LiDAR. CSP ships no trees: put .bin tree models (made with Content Manager's tree converter, or from a pack you may reuse) in the maptotrack/csp_trees folder; see README.txt there. Without models or without CSP, the app's own trees are used."><input type="checkbox" id="csp_trees" checked> CSP trees <span class="muted">(.bin)</span></label>
+      <label class="chk" title="Assetto Corsa with Custom Shaders Patch: the street lamps light the road at night and their lenses glow (CSP lights, NIGHT_SMOOTH condition)"><input type="checkbox" id="csp_lights" checked> CSP night lights</label>
+      <label class="chk" title="Assetto Corsa with Custom Shaders Patch RainFX: puddles on the asphalt, darker wet gravel and soil, slippery road paint"><input type="checkbox" id="csp_rain" checked> CSP rain</label>
+    </div>
+
+    <div class="group-title">Streets &amp; furniture <span class="muted">(OpenStreetMap)</span></div>
+    <div class="chkgrid">
+      <label class="chk route-only" title="The other streets around the track, painted into the ground (drivable)"><input type="checkbox" id="side_roads" checked> Other streets</label>
+      <label class="chk" title="Mapped power lines: steel pylons or wooden poles with their wires"><input type="checkbox" id="power_lines" checked> Power lines</label>
+      <label class="chk" title="Traffic lights where OSM maps them, stop / give-way signs at junctions, speed-limit signs where the limit changes"><input type="checkbox" id="road_signs" checked> Traffic lights &amp; signs</label>
+      <label class="chk" title="Mapped street lamps; in the Americas also wooden utility poles with wires and lamps along the streets, in Europe lamp posts along lit streets"><input type="checkbox" id="street_lights" checked> Street lights &amp; poles</label>
+      <label class="chk" title="Pedestrian crossings mapped in OSM painted on the road: zebra stripes, or two lines at signalled crossings in North America"><input type="checkbox" id="crosswalks" checked> Crosswalks</label>
+      <label class="chk" title="Guard rails mapped in OSM (barrier=guard_rail): W-beam rails on posts that cars hit. Substations (fence, transformers, gantries) come with Power lines"><input type="checkbox" id="guardrails" checked> Guard rails</label>
+    </div>
+    <div class="grid2">
+      <label class="field" title="Look of the stop and speed-limit signs">Sign style
+        <select id="sign_style"><option value="auto">Auto</option><option value="qc">Québec</option><option value="ca">Canada</option><option value="us">USA</option><option value="eu">Europe</option></select></label>
+    </div>
+  </section>
+
+  <!-- 4 ------------------------------------------------------------------------------------------------ -->
+  <section class="card">
+    <h2><span class="step">4</span> Generate</h2>
+    <button id="generateBtn" class="primary">Generate track</button>
+    <pre id="log" class="log hidden"></pre>
+    <div id="result" class="hidden">
+      <div id="stats" class="stats"></div>
+      <div id="warnings"></div>
+      <div class="actions">
+        <button id="view3dBtn">View in 3D</button>
+        <button id="installBtn" class="go" title="Copy the track folder (with the .kn5) into Assetto Corsa">Install to AC</button>
+        <button id="openBtn">Open folder</button>
+      </div>
+      <div class="chart-wrap route-only">
+        <div class="chart-title">Road width along the track</div>
+        <canvas id="widthChart" height="110"></canvas>
+        <div id="widthTip" class="tip hidden"></div>
+      </div>
+      <div class="chart-wrap route-only">
+        <div class="chart-title">Elevation profile</div>
+        <canvas id="profile" height="110"></canvas>
+        <div id="profileTip" class="tip hidden"></div>
+      </div>
+      <div class="group-title">rFactor 2</div>
+      <p class="hint" id="rf2Status">Writes this track as an rF2 location and copies it into rF2's ModDev: start <b>rFactor 2 Mod Mode</b> to drive it.</p>
+      <div class="row"><button id="rf2Btn" title="3D model through Studio 397's Blender exporter (Blender 5.0), surfaces, AI line, grid, sectors and cameras">Export to rFactor 2</button><button id="rf2PkgBtn" title="Packs the track into .mas files, opens Studio 397's MAS2 with it ready: click the yellow box button, Create Single Cmp Package, Package. The app then installs the .rfcmp so the track is in rFactor 2's normal track list.">Package for rFactor 2</button></div>
+      <div class="group-title">Fine-tune in Blender</div>
+      <p class="hint" id="kn5Status">The .kn5 is written automatically when you generate. After editing in Blender, rebuild it here.</p>
+      <div class="row">
+        <button id="blenderBtn" title="Runs Blender to build track.blend + track.fbx for fine-tuning">Build Blender scene</button>
+      </div>
+      <div class="row">
+        <select id="kn5Source" title="What to convert">
+          <option value="blend">From my Blender scene (track.blend)</option>
+          <option value="fbx">From track.fbx</option>
+          <option value="fbx_other">From another FBX file…</option>
+        </select>
+        <button id="kn5Btn" title="Converts with Blender in the background - no ksEditor needed">Build KN5</button>
+      </div>
+      <div class="row hidden" id="kn5PathRow"><input id="kn5Path" placeholder="C:\path\to\model.fbx"></div>
+      <details class="next">
+        <summary>Next steps to drive it</summary>
+        <ol>
+          <li>The generated <code>&lt;name&gt;.kn5</code> is ready: <b>Install to AC</b> and drive.</li>
+          <li>To fine-tune: <b>Build Blender scene</b>, edit and save <code>track.blend</code> in Blender, then <b>Build KN5</b> (from my Blender scene) and install again.</li>
+          <li>Keep object names: <code>1ROAD…</code>, <code>1GRASS…</code>, <code>1WALL…</code> are the drivable/solid surfaces, <code>AC_START_0</code>… the spawn points. Objects or materials starting with <code>__</code> are left out.</li>
+          <li>Drive a lap and record the AI line (Content Manager or the in-game AI app).</li>
+        </ol>
+      </details>
+    </div>
+  </section>
+</aside>
+
+<main>
+  <nav class="tabs">
+    <button data-tab="map" class="active">Map</button>
+    <button data-tab="3d">3D preview</button>
+    <span id="status" class="status"></span>
+  </nav>
+  <div id="map" class="view"></div>
+  <div id="view3d" class="view hidden">
+    <div id="three"></div>
+    <div class="overlay3d">
+      <label class="chk"><input type="checkbox" data-grp="1GRASS_GND,1GRASS_NEAR,1ROAD_NEAR" checked> Terrain</label>
+      <label class="chk"><input type="checkbox" data-grp="BLD,1WALL_BLD" checked> Buildings</label>
+      <label class="chk"><input type="checkbox" data-grp="1WALL_0,1WALL_TYRES,TYRES" checked> Barriers</label>
+      <label class="chk"><input type="checkbox" data-grp="TREES,VEG_" checked> Trees &amp; grass</label>
+      <label class="chk"><input type="checkbox" data-grp="PROPS,1WALL_PROPS,PYLONS,1WALL_PYLON,WIRES" checked> Street furniture</label>
+      <button id="resetCam">Overview</button>
+      <button id="startCam">Start line view</button>
+    </div>
+    <div id="empty3d" class="empty">Generate a track to see it here.</div>
+  </div>
+</main>
+
+<dialog id="settingsDlg">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <label class="field">Blender executable <input id="set_blender" placeholder="C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"></label>
+    <label class="field">Assetto Corsa tracks folder <input id="set_ac" placeholder="…\assettocorsa\content\tracks"></label>
+    <label class="field">Author name (ui_track.json) <input id="set_author"></label>
+    <div class="group-title">rFactor 2</div>
+    <label class="field">rFactor 2 folder <input id="set_rf2" placeholder="D:\SteamLibrary\steamapps\common\rFactor 2"></label>
+    <label class="field" title="Studio 397's .gmt exporter (R25.11) is compiled for Blender 5.0.x (Python 3.11): Blender 5.1 and later can't load it. Leave empty to use the Blender above if it fits, or a blender-5.0.x folder inside the maptotrack folder.">Blender 5.0 for the rF2 exporter <input id="set_b36" placeholder="e.g. C:\maptotrack\blender-5.0.1-windows-x64\blender.exe"></label>
+    <p class="hint" id="rf2AddonState"></p>
+    <div class="row end"><button value="cancel">Cancel</button><button id="saveSettings" value="ok" class="primary">Save</button></div>
+  </form>
+</dialog>
+
+<script src="/web/vendor/leaflet/leaflet.js"></script>
+<script type="module" src="/web/app.js"></script>
+</body>
+</html>
