@@ -15,8 +15,8 @@ jobs:
     env:
       MAPTOTRACK_OFFLINE: "1"          # synthetic map data: no network needed
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -24,9 +24,18 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run the tests
         run: |
-          set -e
+          fail=0
           for t in tests/*_test.py; do
             echo "::group::$t"
-            python "$t"
+            if python "$t" > test_out.log 2>&1; then
+              cat test_out.log
+            else
+              fail=1
+              cat test_out.log
+              # the end of the output as an annotation, visible on the run's summary page
+              msg=$(tail -n 20 test_out.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN{ORS="%0A"} {print}')
+              echo "::error title=$t failed::$msg"
+            fi
             echo "::endgroup::"
           done
+          exit $fail
