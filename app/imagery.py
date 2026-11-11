@@ -109,6 +109,8 @@ def _get(url, params=None):
     path = config.CACHE_DIR / "imagery" / key[:2] / f"{key}.img"
     if path.exists():
         return path.read_bytes()
+    if config.OFFLINE:                         # offline / tests: no download (tests patch _get with a fake server)
+        raise ImageryError("offline mode: no aerial imagery download")
     r = requests.get(url, params=params, headers={"User-Agent": config.USER_AGENT}, timeout=90)
     r.raise_for_status()
     ctype = r.headers.get("content-type", "")
